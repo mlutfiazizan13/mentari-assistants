@@ -156,3 +156,40 @@ export interface AIAnswerResult {
   selectedAnswerId: string;
   reasoning: string;
 }
+
+// Kuesioner
+export interface KuesionerItem {
+  id: string;
+  kuesioner: string;
+  jawaban: number | null;
+}
+
+export interface KuesionerResponse {
+  kode_course: string;
+  kode_section: string;
+  judul: string;
+  konten: string;
+  kuesioner: KuesionerItem[];
+  createdAt: string;
+}
+
+export interface KuesionerSubmitItem {
+  id_kuesioner: string;
+  jawaban: number;
+}
+
+export interface KuesionerSubmitRequest {
+  kode_course: string;
+  kode_section: string;
+  kuesioner: KuesionerSubmitItem[];
+}
+
+export interface KuesionerAutomateRequest {
+  username: string;
+  password: string;
+  captcha?: string;
+  kode_course: string;
+  kode_section: string;
+  /** Answer: 1 = Ya, 0 = Tidak. Default 1 (Ya) */
+  rating?: number;
+}

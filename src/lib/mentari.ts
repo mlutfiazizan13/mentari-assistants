@@ -8,6 +8,8 @@ import type {
   JawabSoalResponse,
   QuizEndResponse,
   Course,
+  KuesionerResponse,
+  KuesionerSubmitRequest,
 } from "@/types/mentari";
 
 const BASE_URL = "https://mentari.unpam.ac.id/api";
@@ -129,6 +131,32 @@ export async function endQuiz(
     {
       method: "PUT",
       body: JSON.stringify({ id_trx_course_sub_section: quizId }),
+    },
+    token
+  );
+}
+
+export async function getKuesioner(
+  token: string,
+  kode_course: string,
+  kode_section: string
+): Promise<KuesionerResponse> {
+  return request<KuesionerResponse>(
+    `/kuesioner/${kode_course}/${kode_section}`,
+    {},
+    token
+  );
+}
+
+export async function submitKuesioner(
+  token: string,
+  data: KuesionerSubmitRequest
+): Promise<{ message: string }> {
+  return request<{ message: string }>(
+    "/kuesioner/submit",
+    {
+      method: "POST",
+      body: JSON.stringify(data),
     },
     token
   );
