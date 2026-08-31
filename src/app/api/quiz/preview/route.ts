@@ -19,6 +19,9 @@ export interface PreviewQuestion {
   aiAnswer?: AIAnswerResult;
 }
 
+// Drives a real Chrome via patchright, so this can never run on the edge runtime.
+export const runtime = "nodejs";
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as AutomationRequest;

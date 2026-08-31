@@ -16,6 +16,9 @@ const RATING_LABELS: Record<number, string> = {
   0: "Tidak",
 };
 
+// Drives a real Chrome via patchright, so this can never run on the edge runtime.
+export const runtime = "nodejs";
+
 export async function POST(req: NextRequest) {
   const logs: AutomationLog[] = [];
 

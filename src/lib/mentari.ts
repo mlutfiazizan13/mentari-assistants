@@ -11,6 +11,7 @@ import type {
   KuesionerResponse,
   KuesionerSubmitRequest,
 } from "@/types/mentari";
+import { browserFetch } from "./browser-fetch";
 
 const BASE_URL = "https://mentari.unpam.ac.id/api";
 
@@ -25,7 +26,7 @@ async function request<T>(
     ...options.headers,
   };
 
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await browserFetch(`${BASE_URL}${path}`, {
     ...options,
     headers,
   });
@@ -39,7 +40,7 @@ async function request<T>(
 }
 
 export async function login(data: LoginRequest): Promise<LoginResponse> {
-  const res = await fetch(`${BASE_URL}/login`, {
+  const res = await browserFetch(`${BASE_URL}/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -73,8 +74,58 @@ export async function login(data: LoginRequest): Promise<LoginResponse> {
   return { access_token: token };
 }
 
-export async function getCourseList(token: string): Promise<Course[]> {
-  return request<Course[]>("/user-course", {}, token);
+/**
+ * Enrolled courses. The web app calls this paginated and cache-busted, and the
+ * body has been seen both as a bare array and wrapped in `data` / `rows`, so
+ * normalise here rather than at every call site.
+ */
+export async function getCourseListRaw(
+  token: string,
+  limit = 100
+): Promise<unknown> {
+  return request<unknown>(
+    `/user-course?page=1&limit=${limit}&t=${Date.now()}`,
+    {},
+    token
+  );
+}
+
+export function normalizeCourses(json: unknown): Course[] {
+  const rows = Array.isArray(json)
+    ? json
+    : ((json as { data?: unknown; rows?: unknown })?.data ??
+        (json as { rows?: unknown })?.rows ??
+        []);
+
+  const list = Array.isArray(rows)
+    ? rows
+    : ((rows as { data?: unknown })?.data ?? []);
+
+  return (Array.isArray(list) ? list : []).filter(
+    (item): item is Course =>
+      !!item &&
+      typeof item === "object" &&
+      typeof (item as Course).kode_course === "string"
+  );
+}
+
+export async function getCourseList(
+  token: string,
+  limit = 100
+): Promise<Course[]> {
+  return normalizeCourses(await getCourseListRaw(token, limit));
+}
+
+/** Full course tree: sections, sub-sections and the quizzes hanging off them. */
+export async function getCourseDetail(
+  token: string,
+  kodeCourse: string
+): Promise<unknown> {
+  return request<unknown>(
+    `/user-course/${encodeURIComponent(kodeCourse)}?t=${Date.now()}`,
+    {},
+    token
+  );
 }
 
 export async function getQuizPeserta(

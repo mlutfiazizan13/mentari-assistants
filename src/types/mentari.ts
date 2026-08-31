@@ -12,10 +12,18 @@ export interface LoginResponse {
 }
 
 // Course
+// As returned by GET /user-course: rows carry `coursename` ("[2] MANAJEMEN
+// PROYEK INFORMATIKA # 07TPLE013 (Sabtu) [E-2]") and the bare
+// `nama_mata_kuliah`. `nama_course` is not one of them -- kept optional for
+// older call sites.
 export interface Course {
   kode_course: string;
-  nama_course: string;
+  coursename?: string;
+  nama_mata_kuliah?: string;
+  shortname?: string;
   nama_dosen?: string;
+  nama_hari?: string;
+  nama_course?: string;
   status?: string;
 }
 
@@ -141,7 +149,7 @@ export interface AutomationResult {
   error?: string;
 }
 
-export type AIProvider = "gemini" | "anthropic" | "ollama";
+export type AIProvider = "gemini" | "anthropic" | "ollama" | "ollama-cloud";
 
 export interface AutomationRequest {
   username: string;
@@ -192,4 +200,47 @@ export interface KuesionerAutomateRequest {
   kode_section: string;
   /** Answer: 1 = Ya, 0 = Tidak. Default 1 (Ya) */
   rating?: number;
+}
+
+// Quiz discovery -- browsing courses instead of pasting a quiz id
+export type QuizKind = "pre-test" | "post-test" | "quiz";
+
+export interface DiscoveredQuiz {
+  /** id_trx_course_sub_section -- what the quiz endpoints call quizId. */
+  id: string;
+  title: string;
+  kind: QuizKind;
+  jenis?: string;
+  sectionTitle?: string;
+  kodeSection?: string;
+  /** Mentari's own completion flag -- the green tick in its UI. */
+  completed?: boolean;
+}
+
+export interface CourseQuizzes {
+  kodeCourse: string;
+  /** Matakuliah name, e.g. "MANAJEMEN PROYEK INFORMATIKA". */
+  namaCourse: string;
+  /** Full label with class and day, when the API gives one. */
+  courseLabel?: string;
+  quizzes: DiscoveredQuiz[];
+  /** Set when this one course failed; the rest of the list still comes back. */
+  error?: string;
+}
+
+export interface QuizListRequest {
+  username: string;
+  password: string;
+  captcha?: string;
+  /** Limit the scan to a single course instead of every enrolled one. */
+  kodeCourse?: string;
+  /** Return the first course's raw JSON, for diagnosing an unknown layout. */
+  debug?: boolean;
+}
+
+export interface QuizListResponse {
+  courses: CourseQuizzes[];
+  error?: string;
+  /** Only present when the request asked for debug. */
+  sample?: { courseList?: unknown; courseDetail?: unknown };
 }
