@@ -1,4 +1,8 @@
-import type { DiscoveredQuiz, QuizKind } from "@/types/mentari";
+import type {
+  DiscoveredQuiz,
+  QuizKind,
+  DiscoveredSection,
+} from "@/types/mentari";
 
 /**
  * Pulls quiz sub-sections out of a `/user-course/{kode_course}` payload.
@@ -54,6 +58,43 @@ export function extractCourseName(payload: unknown): string {
     "nama_course",
     "shortname"
   );
+}
+
+/**
+ * The pertemuan of a course, which is what a kuesioner is addressed to
+ * (`/kuesioner/{kode_course}/{kode_section}`). Kuesioner are not part of the
+ * course tree at all -- only the sections they hang off are -- so every section
+ * is listed and the submit call decides whether one exists.
+ */
+export function extractSections(payload: unknown): DiscoveredSection[] {
+  if (!payload || typeof payload !== "object") return [];
+
+  const sections = (payload as { data?: unknown }).data;
+  if (!Array.isArray(sections)) return [];
+
+  const rows: { sort: number; section: DiscoveredSection }[] = [];
+
+  sections.forEach((raw, index) => {
+    if (!raw || typeof raw !== "object") return;
+    const section = raw as Json;
+
+    const kodeSection = str(section, "kode_section");
+    if (!kodeSection) return;
+
+    const subSections = section.sub_section ?? section.sub_sections;
+    const sort = num(section, "sort");
+
+    rows.push({
+      sort: sort === Number.MAX_SAFE_INTEGER ? index : sort,
+      section: {
+        kodeSection,
+        namaSection: str(section, "nama_section", "judul", "nama") || kodeSection,
+        subSectionCount: Array.isArray(subSections) ? subSections.length : 0,
+      },
+    });
+  });
+
+  return rows.sort((a, b) => a.sort - b.sort).map((row) => row.section);
 }
 
 /** The documented layout: sections in `data`, quizzes in `sub_section`. */

@@ -18,19 +18,20 @@ on page load, so you stop retyping credentials every run. The page reads them fr
 endpoint serves the password to the browser, which is only safe because this app is
 local-only — one more reason not to deploy it.
 
-## Picking a quiz
+## Picking a quiz or a pertemuan
 
-**Load quizzes** in the Quiz tab logs in, walks every enrolled course, and lists the
-pre-tests, post-tests and quizzes it finds. Clicking one fills the Quiz ID field, so
-`id_trx_course_sub_section` never has to be copied out of a Mentari URL.
+**Load quizzes** (Quiz tab) and **Load courses** (Kuesioner tab) run the same scan: log
+in, walk every enrolled course, and list what each one holds. Clicking a quiz fills the
+Quiz ID field; clicking a pertemuan fills both Kode Course and Kode Section. Nothing has
+to be copied out of a Mentari URL, and one scan populates both tabs.
 
 Each row is labelled with its **matakuliah** (the course header) and its **pertemuan**,
 because every quiz on Mentari is titled just "Pretest" or "Posttest" — the pertemuan is
 the only thing telling them apart. The selected one is echoed under the Quiz ID box.
 
-Behind it: `POST /api/quiz/list` with `{ username, password, captcha?, kodeCourse? }`.
+Behind it: `POST /api/mentari/courses` with `{ username, password, captcha?, kodeCourse? }`.
 It calls `GET /api/user-course` for the course list, then `GET /api/user-course/{kode}`
-per course, and `src/lib/quiz-discovery.ts` reads the tree:
+per course, and `src/lib/course-content.ts` reads the tree:
 
 ```jsonc
 { "kode_course": "...", "coursename": "[3] ARSITEKTUR ... (Sabtu) [E-2]",
@@ -42,15 +43,22 @@ per course, and `src/lib/quiz-discovery.ts` reads the tree:
 `sub_section.id` is the quizId (`id_trx_course_sub_section`); it is `null` for anything
 the lecturer hasn't published, and those rows are skipped. `kode_template` gives
 `PRE_TEST` / `POST_TEST`, and `completion` is Mentari's own done flag — the green tick
-in its UI — so finished quizzes show a `✓` and each course header counts `done/total`. Results are ordered by pertemuan, pre-test before post-test.
+in its UI — so finished quizzes show a `✓` and each course header counts `done/total`.
+Results are ordered by pertemuan, pre-test before post-test.
+
 A course laid out differently falls back to a generic tree walk that takes any node with
 a UUID id and a quiz-ish title. One course failing is reported on its own row; the rest
 still list. Pass `kodeCourse` to scan a single course instead of all of them.
 
+The same pass collects each course's sections (`PERTEMUAN_1` = "Pertemuan 1", …), which
+is what a kuesioner is addressed to. Kuesioner themselves are not in the course tree —
+they live behind `/kuesioner/{kode_course}/{kode_section}` — so every pertemuan is
+offered and the submit call decides whether one exists.
+
 If a course's quizzes don't show up, grab its raw JSON:
 
 ```bash
-curl -s -X POST http://localhost:3000/api/quiz/list \
+curl -s -X POST http://localhost:3000/api/mentari/courses \
   -H "Content-Type: application/json" \
   -d '{"username":"...","password":"...","kodeCourse":"20261-...","debug":true}' \
   | jq .sample

@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { login, startQuiz, getQuizSoal, jawabSoal, endQuiz } from "@/lib/mentari";
+import {
+  login,
+  startQuiz,
+  getQuizSoal,
+  jawabSoal,
+  endQuiz,
+  getQuizGrade,
+  readGrade,
+} from "@/lib/mentari";
 import { answerAllQuestions } from "@/lib/ai";
+import { stripHtml } from "@/lib/html";
 import type { AutomationLog, AutomationRequest } from "@/types/mentari";
 
 function log(
@@ -67,17 +76,23 @@ export async function POST(req: NextRequest) {
     // Step 4: AI answers all questions
     log(logs, "info", `Sending ${questions.length} questions to AI (${provider}) for analysis...`);
     const aiAnswers = await answerAllQuestions(questions, provider);
+    const fallbacks = aiAnswers.filter((a) => a.fallback);
     log(logs, "success", "AI has determined answers for all questions.");
+
+    for (const bad of fallbacks) {
+      const q = questions.find((item) => item.id === bad.questionId);
+      log(
+        logs,
+        "warning",
+        `Q${q?.sort ?? "?"}: AI answer could not be parsed, defaulted to option 1. Last error: ${bad.error ?? "unknown"}`
+      );
+    }
 
     // Step 5: Submit each answer
     let answeredCount = 0;
     for (const answer of aiAnswers) {
       const question = questions.find((q) => q.id === answer.questionId);
-      const questionText = question?.deskripsi
-        .replace(/<[^>]*>/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 80);
+      const questionText = stripHtml(question?.deskripsi ?? "").slice(0, 80);
 
       log(
         logs,
@@ -102,10 +117,30 @@ export async function POST(req: NextRequest) {
     const endResult = await endQuiz(token, quizId);
     log(logs, "success", `Quiz submitted: ${endResult.message}`);
 
+    // Step 7: Read back the score. Never fatal -- the answers are already in.
+    log(logs, "info", "Fetching grade...");
+    const inline = readGrade(endResult);
+    const gradeInfo = inline !== null
+      ? { grade: inline, source: "quiz/end" }
+      : await getQuizGrade(token, quizId, username);
+
+    if (gradeInfo) {
+      log(logs, "success", `Grade: ${gradeInfo.grade} (from ${gradeInfo.source})`);
+    } else {
+      log(
+        logs,
+        "warning",
+        "Grade not reported yet — Mentari may still be scoring it. Check the course page."
+      );
+    }
+
     return NextResponse.json({
       success: true,
       totalQuestions: questions.length,
       answeredQuestions: answeredCount,
+      fallbackAnswers: fallbacks.length,
+      grade: gradeInfo?.grade,
+      gradeSource: gradeInfo?.source,
       logs,
     });
   } catch (err) {

@@ -5,20 +5,25 @@ import {
   normalizeCourses,
   getCourseDetail,
 } from "@/lib/mentari";
-import { discoverQuizzes, extractCourseName } from "@/lib/quiz-discovery";
+import {
+  discoverQuizzes,
+  extractSections,
+  extractCourseName,
+} from "@/lib/course-content";
 import type {
   Course,
-  CourseQuizzes,
-  QuizListRequest,
-  QuizListResponse,
+  CourseContent,
+  CourseScanRequest,
+  CourseScanResponse,
 } from "@/types/mentari";
 
 // Drives a real Chrome via patchright, so this can never run on the edge runtime.
 export const runtime = "nodejs";
 
 /**
- * Every pre-test / post-test / quiz the student can open, so the quiz id never
- * has to be copied out of the Mentari URL by hand.
+ * One scan of everything the two tabs need to fill themselves in: per course,
+ * the pre-tests / post-tests it holds and the pertemuan a kuesioner can be
+ * addressed to. Saves copying ids out of the Mentari URL by hand.
  *
  * POST { username, password, captcha?, kodeCourse? }
  *
@@ -28,7 +33,7 @@ export const runtime = "nodejs";
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as QuizListRequest;
+    const body = (await req.json()) as CourseScanRequest;
     const { username, password, captcha = "test", kodeCourse, debug } = body;
 
     if (!username || !password) {
@@ -40,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     const { access_token: token } = await login({ username, password, captcha });
 
-    const sample: QuizListResponse["sample"] = debug ? {} : undefined;
+    const sample: CourseScanResponse["sample"] = debug ? {} : undefined;
 
     let courses: Course[];
     if (kodeCourse) {
@@ -51,21 +56,23 @@ export async function POST(req: NextRequest) {
       courses = normalizeCourses(rawList);
     }
 
-    const results: CourseQuizzes[] = [];
+    const results: CourseContent[] = [];
 
     for (const course of courses) {
-      const row: CourseQuizzes = {
+      const row: CourseContent = {
         kodeCourse: course.kode_course,
         namaCourse:
           course.nama_mata_kuliah || course.coursename || course.kode_course,
         courseLabel: course.coursename,
         quizzes: [],
+        sections: [],
       };
 
       try {
         const detail = await getCourseDetail(token, course.kode_course);
         if (sample && sample.courseDetail === undefined) sample.courseDetail = detail;
         row.quizzes = discoverQuizzes(detail);
+        row.sections = extractSections(detail);
 
         // Scanning a single course means no list row to take the name from.
         const nameFromDetail = extractCourseName(detail);
@@ -82,7 +89,7 @@ export async function POST(req: NextRequest) {
 
     // With debug on, the first course's untouched JSON rides along so an
     // unfamiliar course layout can be diagnosed without a browser devtools trip.
-    const payload: QuizListResponse = { courses: results, sample };
+    const payload: CourseScanResponse = { courses: results, sample };
     return NextResponse.json(payload);
   } catch (err) {
     return NextResponse.json(

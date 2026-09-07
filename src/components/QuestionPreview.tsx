@@ -15,6 +15,8 @@ interface PreviewQuestion {
     questionId: string;
     selectedAnswerId: string;
     reasoning: string;
+    fallback?: boolean;
+    error?: string;
   };
 }
 
@@ -88,23 +90,30 @@ export default function QuestionPreview({
             <div className="p-3 space-y-1.5">
               {q.options.map((opt) => {
                 const isSelected = q.aiAnswer?.selectedAnswerId === opt.id;
+                // A defaulted answer is a guess, not a pick -- do not paint it
+                // the same green as one the model actually reasoned about.
+                const isFallback = isSelected && q.aiAnswer?.fallback === true;
                 return (
                   <div
                     key={opt.id}
                     className={`flex items-start gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
-                      isSelected
-                        ? "bg-green-500/20 border border-green-500/40 text-green-300"
-                        : "text-gray-400 border border-transparent"
+                      isFallback
+                        ? "bg-yellow-500/20 border border-yellow-500/40 text-yellow-200"
+                        : isSelected
+                          ? "bg-green-500/20 border border-green-500/40 text-green-300"
+                          : "text-gray-400 border border-transparent"
                     }`}
                   >
                     <span
                       className={`shrink-0 w-5 h-5 rounded-full border flex items-center justify-center text-xs font-bold mt-0.5 ${
-                        isSelected
-                          ? "bg-green-500 border-green-500 text-white"
-                          : "border-gray-600"
+                        isFallback
+                          ? "bg-yellow-500 border-yellow-500 text-black"
+                          : isSelected
+                            ? "bg-green-500 border-green-500 text-white"
+                            : "border-gray-600"
                       }`}
                     >
-                      {isSelected ? "✓" : opt.sort}
+                      {isFallback ? "!" : isSelected ? "✓" : opt.sort}
                     </span>
                     <span className="leading-relaxed">{opt.text}</span>
                   </div>
@@ -112,10 +121,19 @@ export default function QuestionPreview({
               })}
             </div>
             {q.aiAnswer?.reasoning && (
-              <div className="px-4 pb-3">
-                <p className="text-xs text-gray-500 italic">
+              <div className="px-4 pb-3 space-y-1">
+                <p
+                  className={`text-xs italic ${
+                    q.aiAnswer.fallback ? "text-yellow-500/80" : "text-gray-500"
+                  }`}
+                >
                   AI reasoning: {q.aiAnswer.reasoning}
                 </p>
+                {q.aiAnswer.fallback && q.aiAnswer.error && (
+                  <p className="text-xs text-yellow-600/70 break-words">
+                    Last error: {q.aiAnswer.error}
+                  </p>
+                )}
               </div>
             )}
           </div>

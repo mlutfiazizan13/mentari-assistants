@@ -7,9 +7,9 @@ import type {
   AutomationLog,
   AutomationResult,
   AIProvider,
-  CourseQuizzes,
+  CourseContent,
   QuizKind,
-  QuizListResponse,
+  CourseScanResponse,
 } from "@/types/mentari";
 import type { FormDefaults } from "./api/defaults/route";
 
@@ -29,7 +29,13 @@ interface PreviewData {
     sort: number;
     deskripsi: string;
     options: { id: string; text: string; sort: number }[];
-    aiAnswer?: { questionId: string; selectedAnswerId: string; reasoning: string };
+    aiAnswer?: {
+      questionId: string;
+      selectedAnswerId: string;
+      reasoning: string;
+      fallback?: boolean;
+      error?: string;
+    };
   }[];
 }
 
@@ -41,6 +47,17 @@ interface KuesionerResult {
   ratingLabel?: string;
   error?: string;
   logs: AutomationLog[];
+}
+
+/** Mentari grades on 0-100, sometimes with decimals that add nothing. */
+function formatGrade(grade: number): string {
+  return Number.isInteger(grade) ? String(grade) : grade.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function gradeColor(grade: number): string {
+  if (grade >= 75) return "text-green-400";
+  if (grade >= 60) return "text-yellow-400";
+  return "text-red-400";
 }
 
 type ProviderColor = "blue" | "cyan" | "orange" | "purple";
@@ -118,11 +135,12 @@ export default function Home() {
   const [result, setResult] = useState<AutomationResult | null>(null);
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
 
-  // Quiz picker (pre-test / post-test browser)
-  const [courseQuizzes, setCourseQuizzes] = useState<CourseQuizzes[] | null>(null);
-  const [quizListLoading, setQuizListLoading] = useState(false);
-  const [quizListError, setQuizListError] = useState<string | null>(null);
+  // Course scan, shared by the quiz and kuesioner pickers
+  const [courses, setCourses] = useState<CourseContent[] | null>(null);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [openCourse, setOpenCourse] = useState<string | null>(null);
+  const [openKuesionerCourse, setOpenKuesionerCourse] = useState<string | null>(null);
 
   // Kuesioner state
   const [kode_course, setKodeCourse] = useState("");
@@ -189,9 +207,18 @@ export default function Home() {
     !!envDefaults && Object.values(envDefaults).some(Boolean);
 
   /** The loaded quiz whose id is in the box, so the form can name it. */
-  const selectedQuiz = courseQuizzes
+  const selectedQuiz = courses
     ?.flatMap((course) => course.quizzes.map((quiz) => ({ course, quiz })))
     .find((entry) => entry.quiz.id === quizId);
+
+  /** The loaded pertemuan the kuesioner boxes point at, for the summary line. */
+  const selectedSection = courses
+    ?.flatMap((course) => course.sections.map((section) => ({ course, section })))
+    .find(
+      (entry) =>
+        entry.course.kodeCourse === kode_course &&
+        entry.section.kodeSection === kode_section
+    );
 
   const isQuizLoading = step === "previewing" || step === "automating";
   const isKuesionerLoading = kuesionerStep === "loading";
@@ -220,22 +247,23 @@ export default function Home() {
     }
   };
 
-  const handleLoadQuizzes = async () => {
-    setQuizListLoading(true);
-    setQuizListError(null);
+  const handleLoadCourses = async () => {
+    setScanLoading(true);
+    setScanError(null);
     try {
-      const res = await fetch("/api/quiz/list", {
+      const res = await fetch("/api/mentari/courses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password, captcha }),
       });
-      const data = (await res.json()) as QuizListResponse;
+      const data = (await res.json()) as CourseScanResponse;
       if (!res.ok || data.error) {
-        setQuizListError(data.error ?? "Failed to load quizzes");
-        setCourseQuizzes(data.courses?.length ? data.courses : null);
+        setScanError(data.error ?? "Failed to load courses");
+        setCourses(data.courses?.length ? data.courses : null);
         return;
       }
-      setCourseQuizzes(data.courses);
+      setCourses(data.courses);
+
       // Expand the course holding the current quiz, or the only one there is.
       const withQuizzes = data.courses.filter((c) => c.quizzes.length);
       setOpenCourse(
@@ -243,10 +271,14 @@ export default function Home() {
           ?.kodeCourse ??
           (withQuizzes.length === 1 ? withQuizzes[0].kodeCourse : null)
       );
+      setOpenKuesionerCourse(
+        data.courses.find((c) => c.kodeCourse === kode_course)?.kodeCourse ??
+          (data.courses.length === 1 ? data.courses[0].kodeCourse : null)
+      );
     } catch (err) {
-      setQuizListError(err instanceof Error ? err.message : "Unknown error");
+      setScanError(err instanceof Error ? err.message : "Unknown error");
     } finally {
-      setQuizListLoading(false);
+      setScanLoading(false);
     }
   };
 
@@ -436,13 +468,13 @@ export default function Home() {
                     Or pick from your courses
                   </span>
                   <button
-                    onClick={handleLoadQuizzes}
-                    disabled={quizListLoading || isQuizLoading || !username || !password}
+                    onClick={handleLoadCourses}
+                    disabled={scanLoading || isQuizLoading || !username || !password}
                     className="text-xs font-medium px-2.5 py-1 rounded-md border border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    {quizListLoading ? (
+                    {scanLoading ? (
                       <Spinner label="Loading..." />
-                    ) : courseQuizzes ? (
+                    ) : courses ? (
                       "Refresh"
                     ) : (
                       "Load quizzes"
@@ -450,20 +482,20 @@ export default function Home() {
                   </button>
                 </div>
 
-                {quizListError && (
-                  <p className="mb-2 text-xs text-red-400">{quizListError}</p>
+                {scanError && (
+                  <p className="mb-2 text-xs text-red-400">{scanError}</p>
                 )}
 
-                {courseQuizzes && (
+                {courses && (
                   <div className="max-h-80 overflow-y-auto rounded-lg border border-gray-800 bg-gray-950/60 divide-y divide-gray-800">
-                    {courseQuizzes.every((c) => c.quizzes.length === 0) && (
+                    {courses.every((c) => c.quizzes.length === 0) && (
                       <p className="px-3 py-3 text-xs text-gray-500">
-                        No quizzes found in {courseQuizzes.length} course
-                        {courseQuizzes.length === 1 ? "" : "s"}.
+                        No quizzes found in {courses.length} course
+                        {courses.length === 1 ? "" : "s"}.
                       </p>
                     )}
 
-                    {courseQuizzes.map((course) => {
+                    {courses.map((course) => {
                       if (!course.quizzes.length && !course.error) return null;
                       const isOpen = openCourse === course.kodeCourse;
                       return (
@@ -637,6 +669,112 @@ export default function Home() {
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
                 />
               </div>
+              {/* Pertemuan picker -- fills kode_course and kode_section for you */}
+              <div className="sm:col-span-2">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-gray-500">
+                    Or pick a pertemuan from your courses
+                  </span>
+                  <button
+                    onClick={handleLoadCourses}
+                    disabled={
+                      scanLoading || isKuesionerLoading || !username || !password
+                    }
+                    className="text-xs font-medium px-2.5 py-1 rounded-md border border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {scanLoading ? (
+                      <Spinner label="Loading..." />
+                    ) : courses ? (
+                      "Refresh"
+                    ) : (
+                      "Load courses"
+                    )}
+                  </button>
+                </div>
+
+                {scanError && (
+                  <p className="mb-2 text-xs text-red-400">{scanError}</p>
+                )}
+
+                {selectedSection && (
+                  <p className="mb-2 flex items-center gap-1.5 text-[11px] text-gray-400">
+                    <span className="truncate">{selectedSection.course.namaCourse}</span>
+                    <span className="text-gray-600">·</span>
+                    <span className="shrink-0 text-teal-400">
+                      {selectedSection.section.namaSection}
+                    </span>
+                  </p>
+                )}
+
+                {courses && (
+                  <div className="max-h-80 overflow-y-auto rounded-lg border border-gray-800 bg-gray-950/60 divide-y divide-gray-800">
+                    {courses.map((course) => {
+                      if (!course.sections.length && !course.error) return null;
+                      const isOpen = openKuesionerCourse === course.kodeCourse;
+                      return (
+                        <div key={course.kodeCourse}>
+                          <button
+                            onClick={() =>
+                              setOpenKuesionerCourse(isOpen ? null : course.kodeCourse)
+                            }
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-gray-800/40"
+                          >
+                            <span className="shrink-0 text-gray-600 text-[10px]">
+                              {isOpen ? "▼" : "▶"}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-semibold text-gray-200">
+                                {course.namaCourse}
+                              </span>
+                              <span className="block truncate text-[10px] text-gray-600">
+                                {course.kodeCourse}
+                              </span>
+                            </span>
+                            <span className="shrink-0 rounded bg-gray-800 px-1.5 py-px text-[10px] text-gray-400">
+                              {course.sections.length}
+                            </span>
+                          </button>
+
+                          {course.error && (
+                            <p className="px-3 pb-2 text-[11px] text-red-400">
+                              {course.error}
+                            </p>
+                          )}
+
+                          {isOpen && (
+                            <div className="grid grid-cols-2 gap-1 px-3 pb-2 sm:grid-cols-3">
+                              {course.sections.map((section) => {
+                                const isSelected =
+                                  kode_course === course.kodeCourse &&
+                                  kode_section === section.kodeSection;
+                                return (
+                                  <button
+                                    key={section.kodeSection}
+                                    onClick={() => {
+                                      setKodeCourse(course.kodeCourse);
+                                      setKodeSection(section.kodeSection);
+                                    }}
+                                    disabled={isKuesionerLoading}
+                                    title={section.kodeSection}
+                                    className={`truncate rounded-md border px-2 py-1.5 text-left text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                                      isSelected
+                                        ? "border-teal-500 bg-teal-600/15 text-white"
+                                        : "border-transparent text-gray-300 hover:border-gray-700 hover:bg-gray-800/60"
+                                    }`}
+                                  >
+                                    {section.namaSection}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               <div className="sm:col-span-2">
                 <label className="block text-xs text-gray-500 mb-1.5">
                   Answer <span className="text-gray-600">(applied to all questions)</span>
@@ -690,17 +828,37 @@ export default function Home() {
               <div className={`rounded-xl border px-5 py-4 mb-6 ${result.success ? "bg-green-500/10 border-green-500/30" : "bg-red-500/10 border-red-500/30"}`}>
                 <div className="flex items-center gap-3">
                   <span className="text-2xl">{result.success ? "✅" : "❌"}</span>
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className={`font-semibold ${result.success ? "text-green-400" : "text-red-400"}`}>
                       {result.success ? "Quiz automation complete!" : "Automation failed"}
                     </p>
                     {result.success && result.totalQuestions !== undefined && (
                       <p className="text-sm text-gray-400 mt-0.5">
                         Answered {result.answeredQuestions} of {result.totalQuestions} questions
+                        {result.fallbackAnswers ? (
+                          <span className="text-yellow-500">
+                            {" "}
+                            · {result.fallbackAnswers} defaulted to option 1
+                          </span>
+                        ) : null}
+                      </p>
+                    )}
+                    {result.success && result.grade === undefined && (
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Grade not reported yet — Mentari may still be scoring it.
                       </p>
                     )}
                     {result.error && <p className="text-sm text-red-300 mt-0.5">{result.error}</p>}
                   </div>
+
+                  {result.success && result.grade !== undefined && (
+                    <div className="shrink-0 text-right" title={result.gradeSource}>
+                      <p className="text-[10px] uppercase tracking-wider text-gray-500">Grade</p>
+                      <p className={`text-3xl font-bold leading-none ${gradeColor(result.grade)}`}>
+                        {formatGrade(result.grade)}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

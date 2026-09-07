@@ -187,6 +187,110 @@ export async function endQuiz(
   );
 }
 
+/** Grades arrive as numbers or numeric strings depending on the endpoint. */
+function toGrade(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
+ * A grade carried directly by a response body. `/quiz/end` is typed as just a
+ * message, but has been seen returning the score alongside it, so look before
+ * paying for another round trip.
+ */
+export function readGrade(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") return null;
+
+  const obj = payload as Record<string, unknown>;
+  const keys = ["grade", "nilai", "score", "total_grade"];
+
+  for (const key of keys) {
+    const direct = toGrade(obj[key]);
+    if (direct !== null) return direct;
+  }
+  for (const nested of ["data", "quiz", "result"]) {
+    const child = obj[nested];
+    if (child && typeof child === "object") {
+      for (const key of keys) {
+        const value = toGrade((child as Record<string, unknown>)[key]);
+        if (value !== null) return value;
+      }
+    }
+  }
+  return null;
+}
+
+export interface QuizGrade {
+  grade: number;
+  /** Which endpoint the number came from, so the log can say. */
+  source: string;
+}
+
+/**
+ * The score for the attempt that just ended.
+ *
+ * `/quiz/peserta` is the authoritative view but is a roster: pick our own row by
+ * NIM (the login username) rather than trusting row order. Mentari also needs a
+ * moment to score an attempt, so a missing grade is retried -- a grade of 0 is a
+ * real result and is returned immediately.
+ */
+export async function getQuizGrade(
+  token: string,
+  quizId: string,
+  nim?: string,
+  attempts = 3
+): Promise<QuizGrade | null> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const peserta = await getQuizPeserta(token, quizId);
+      const rows = Array.isArray(peserta.data) ? peserta.data : [];
+      const own = nim ? rows.find((p) => p.nim === nim) : undefined;
+      const graded = rows.filter((p) => p.quiz);
+
+      const candidates: [string, unknown][] = [
+        ["quiz/peserta (your row)", own?.quiz?.grade],
+        ["quiz/peserta", peserta.quiz?.grade],
+        // Only trust an unmatched row when there is exactly one attempt on file.
+        ["quiz/peserta (only attempt)", graded.length === 1 ? graded[0].quiz?.grade : undefined],
+      ];
+
+      for (const [source, value] of candidates) {
+        const grade = toGrade(value);
+        if (grade !== null) return { grade, source };
+      }
+    } catch (err) {
+      console.warn(
+        `[grade] /quiz/peserta attempt ${attempt} failed:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+
+    if (attempt < attempts) await new Promise((r) => setTimeout(r, 1500));
+  }
+
+  // Last resort: the per-question scores on the answered paper.
+  try {
+    const soal = await getQuizSoal(token, quizId);
+    const questions = Array.isArray(soal.data) ? soal.data : [];
+    const scored = questions.filter((q) => toGrade(q.grade_jawaban) !== null);
+    if (scored.length > 0) {
+      const total = scored.reduce((sum, q) => sum + (toGrade(q.grade_jawaban) ?? 0), 0);
+      return { grade: total, source: "quiz/soal (sum of per-question grades)" };
+    }
+  } catch (err) {
+    console.warn(
+      "[grade] /quiz/soal fallback failed:",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  return null;
+}
+
 export async function getKuesioner(
   token: string,
   kode_course: string,

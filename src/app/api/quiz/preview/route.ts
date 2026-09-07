@@ -2,14 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { login, startQuiz, getQuizSoal } from "@/lib/mentari";
 import { answerAllQuestions } from "@/lib/ai";
 import type { AutomationRequest, QuizQuestion, AIAnswerResult } from "@/types/mentari";
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+import { stripHtml } from "@/lib/html";
 
 export interface PreviewQuestion {
   id: string;

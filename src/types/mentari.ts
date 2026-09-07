@@ -143,8 +143,12 @@ export interface AutomationLog {
 export interface AutomationResult {
   success: boolean;
   grade?: number;
+  /** Endpoint the grade came from; absent when no grade was available. */
+  gradeSource?: string;
   totalQuestions?: number;
   answeredQuestions?: number;
+  /** Questions where the AI could not be parsed and option 1 was submitted. */
+  fallbackAnswers?: number;
   logs: AutomationLog[];
   error?: string;
 }
@@ -163,6 +167,10 @@ export interface AIAnswerResult {
   questionId: string;
   selectedAnswerId: string;
   reasoning: string;
+  /** True when the model could not be parsed and option 1 was used instead. */
+  fallback?: boolean;
+  /** Last provider/parse error behind a `fallback` answer. */
+  error?: string;
 }
 
 // Kuesioner
@@ -217,18 +225,27 @@ export interface DiscoveredQuiz {
   completed?: boolean;
 }
 
-export interface CourseQuizzes {
+export interface DiscoveredSection {
+  /** e.g. "PERTEMUAN_1" -- what /kuesioner/{kode_course}/{kode_section} wants. */
+  kodeSection: string;
+  namaSection: string;
+  subSectionCount: number;
+}
+
+export interface CourseContent {
   kodeCourse: string;
   /** Matakuliah name, e.g. "MANAJEMEN PROYEK INFORMATIKA". */
   namaCourse: string;
   /** Full label with class and day, when the API gives one. */
   courseLabel?: string;
   quizzes: DiscoveredQuiz[];
+  /** Every pertemuan of the course, for addressing a kuesioner. */
+  sections: DiscoveredSection[];
   /** Set when this one course failed; the rest of the list still comes back. */
   error?: string;
 }
 
-export interface QuizListRequest {
+export interface CourseScanRequest {
   username: string;
   password: string;
   captcha?: string;
@@ -238,8 +255,8 @@ export interface QuizListRequest {
   debug?: boolean;
 }
 
-export interface QuizListResponse {
-  courses: CourseQuizzes[];
+export interface CourseScanResponse {
+  courses: CourseContent[];
   error?: string;
   /** Only present when the request asked for debug. */
   sample?: { courseList?: unknown; courseDetail?: unknown };
