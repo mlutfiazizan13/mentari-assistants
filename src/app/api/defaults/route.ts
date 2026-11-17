@@ -15,7 +15,7 @@ export interface FormDefaults {
   provider: AIProvider | "";
 }
 
-const PROVIDERS: AIProvider[] = ["gemini", "anthropic", "ollama", "ollama-cloud"];
+const PROVIDERS: AIProvider[] = ["gemini", "anthropic", "ollama", "ollama-cloud", "vllm"];
 
 /**
  * Prefill values for the form, straight from `.env.local`.

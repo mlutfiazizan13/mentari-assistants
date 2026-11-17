@@ -10,6 +10,9 @@ import type {
   Course,
   KuesionerResponse,
   KuesionerSubmitRequest,
+  ForumTopicsResponse,
+  ForumThreadResponse,
+  ForumReplyRequest,
 } from "@/types/mentari";
 import { browserFetch } from "./browser-fetch";
 
@@ -313,6 +316,44 @@ export async function submitKuesioner(
       method: "POST",
       body: JSON.stringify(data),
     },
+    token
+  );
+}
+
+// ── Forum diskusi ──────────────────────────────────────────────────────
+// Endpoints as called by Mentari's own forum pages (forum.get / reply / addReply).
+
+/** Forum header plus its topics. `subSectionId` is the FORUM sub-section id. */
+export async function getForumTopics(
+  token: string,
+  subSectionId: string
+): Promise<ForumTopicsResponse> {
+  return request<ForumTopicsResponse>(
+    `/forum/topic/${encodeURIComponent(subSectionId)}`,
+    {},
+    token
+  );
+}
+
+/** One topic and every reply under it, flat, linked by `id_parent`. */
+export async function getForumThread(
+  token: string,
+  topicId: string
+): Promise<ForumThreadResponse> {
+  return request<ForumThreadResponse>(
+    `/forum/reply/${encodeURIComponent(topicId)}`,
+    {},
+    token
+  );
+}
+
+export async function addForumReply(
+  token: string,
+  data: ForumReplyRequest
+): Promise<unknown> {
+  return request<unknown>(
+    "/forum/reply",
+    { method: "POST", body: JSON.stringify(data) },
     token
   );
 }

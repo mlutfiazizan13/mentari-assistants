@@ -9,6 +9,8 @@ import {
   discoverQuizzes,
   extractSections,
   extractCourseName,
+  discoverForums,
+  discoverKuesioners,
 } from "@/lib/course-content";
 import type {
   Course,
@@ -66,6 +68,8 @@ export async function POST(req: NextRequest) {
         courseLabel: course.coursename,
         quizzes: [],
         sections: [],
+        forums: [],
+        kuesioners: [],
       };
 
       try {
@@ -73,6 +77,8 @@ export async function POST(req: NextRequest) {
         if (sample && sample.courseDetail === undefined) sample.courseDetail = detail;
         row.quizzes = discoverQuizzes(detail);
         row.sections = extractSections(detail);
+        row.forums = discoverForums(detail);
+        row.kuesioners = discoverKuesioners(detail);
 
         // Scanning a single course means no list row to take the name from.
         const nameFromDetail = extractCourseName(detail);

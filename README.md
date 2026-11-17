@@ -18,6 +18,33 @@ on page load, so you stop retyping credentials every run. The page reads them fr
 endpoint serves the password to the browser, which is only safe because this app is
 local-only — one more reason not to deploy it.
 
+## Per Pertemuan (the default tab)
+
+The guided way through a course, in the order Mentari expects:
+**pre-test → forum diskusi → post-test → kuesioner**.
+
+1. **Load my courses**: one scan (see below) lists every course with a progress bar.
+2. **Pick a course**: every pertemuan shows four bars, one per step: green done,
+   yellow to do, grey not published. The first pertemuan with work left is opened
+   for you, on its first unfinished step. The course you picked is remembered.
+3. **Work the steps**:
+   - *Pre-test / Post-test*: one button, "Answer with AI & submit", then the grade and
+     each question's AI reasoning. A quiz Mentari already marks done shows **Retake**
+     behind a confirm, because `/quiz/start` resets the attempt.
+   - *Forum Diskusi*: opens straight onto the topics (no AI yet). With several topics,
+     chips at the top jump between them and show which are answered and which have
+     lecturer follow-ups. Draft topics one by one, or **Draft all to-do**, then review
+     and **Post selected**.
+   - *Kuesioner*: Ya/Tidak for every question, then submit.
+4. After each step the course is re-read so the done flags catch up, and the next
+   unfinished step opens.
+
+`src/lib/pertemuan.ts` builds this from the scan: quizzes by `kode_template`, forums
+by `tipe: "FORUM"`, kuesioner by `tipe: "QUESIONER"` (each carries Mentari's
+`completion` flag). The Quiz / Kuesioner / Forum Diskusi tabs are still there for doing
+one thing by hand. The AI provider lives in the shared **Account & AI** card and the
+last one picked is remembered in the browser.
+
 ## Picking a quiz or a pertemuan
 
 **Load quizzes** (Quiz tab) and **Load courses** (Kuesioner tab) run the same scan: log
@@ -74,6 +101,7 @@ Picked per run in the UI, or via `"provider"` in the request body.
 | `ollama-cloud` | `OLLAMA_CLOUD_MODEL`, default `gpt-oss:120b` | `OLLAMA_API_KEY` |
 | `ollama` | `OLLAMA_MODEL`, default `qwen2.5:7b` | a local `ollama serve` |
 | `anthropic` | `claude-haiku-4-5` | `ANTHROPIC_API_KEY` |
+| `vllm` | `VLLM_MODEL`, default `prod-model` (Qwen3 27B) | `VLLM_BASE_URL`, `VLLM_API_KEY` |
 
 `ollama-cloud` hits `https://ollama.com/api/chat` with a bearer key — no local
 daemon, no download. Model names there drop the `-cloud` suffix (that suffix is
@@ -83,6 +111,56 @@ only for a *local* Ollama offloading to the cloud); browse them at
 ```bash
 OLLAMA_API_KEY=... node scripts/smoke-ollama-cloud.mjs
 ```
+
+## Forum diskusi
+
+The **Forum Diskusi** tab drafts a reply to each topic of a pertemuan's forum, lets you
+edit them, and posts only the ones you tick and confirm.
+
+1. **Load forums** reuses the course scan; every published forum (`tipe: "FORUM"`,
+   `kode_template: "FORUM_DISKUSI"`) is listed per course with its pertemuan theme.
+2. **Draft Replies** → `POST /api/forum/preview` with
+   `{ username, password, captcha?, forumId, provider?, courseName?, sectionTitle?, includeAnswered? }`.
+   It reads the forum and each thread, and asks the AI for a plain-text reply in Indonesian.
+   Topics you already replied to (matched by your NIM) are shown with your reply and
+   no draft, unless `includeAnswered` is on. **Nothing is posted here.**
+3. **Post N selected** → `POST /api/forum/post` with
+   `{ username, password, captcha?, replies: [{ topicId, judul, konten }], allowDuplicate? }`.
+   Each thread is re-read first and skipped if a reply of yours appeared since the draft;
+   after posting it is read again to confirm the reply is visible.
+
+**Open Forum** (`readOnly: true` on the preview call) loads every topic and its full
+discussion without calling the AI, so a forum can be read here instead of on Mentari:
+replies nested the way Mentari's "extended" view nests them, lecturer and your own posts
+highlighted, and an All / Lecturer / Mine filter. Any topic or follow-up can still be
+drafted one at a time from there.
+
+**The whole thread is read, not just the topic post.** Across real courses the question
+is often elsewhere (`src/lib/forum.ts` → `analyzeThread`):
+
+- **Soal posted as a lecturer reply.** Some topics hold only instructions ("JANGAN REPLAY
+  PADA SOAL … buat create baru") and the numbered soal sit in the lecturer's own post
+  under the topic. Those posts are fed to the AI with the topic and shown in the card.
+- **No question at all** ("silahkan diskusikan disini"). Classmates post their own
+  "Izin bertanya" questions; the card suggests *Ask a question*, and question drafts are
+  given the existing classmate questions so they don't repeat one.
+- **Lecturer follow-ups to you.** A lecturer reply under one of your posts that asks
+  something is listed under "Lecturer replied to you", marked answered once you have
+  posted under that post of yours after it. In *Answer* mode unanswered ones get a
+  draft; posting puts the answer under your own post (`id_post` = your post), the same
+  place Mentari's reply button does.
+
+Mentari endpoints (taken from its own forum pages):
+
+| Call | Endpoint |
+| --- | --- |
+| Forum + topics | `GET /api/forum/topic/{subSectionId}` |
+| Topic thread | `GET /api/forum/reply/{topicId}` — replies in `data`, linked by `id_parent` |
+| Reply | `POST /api/forum/reply` `{ id_topic, id_post, konten, judul: "RE <topic>" }` |
+
+A top-level reply uses the topic id for both `id_topic` and `id_post`. `konten` is rendered
+as HTML with `white-space: pre-wrap`, so drafts are sent as plain text with `<`, `>`, `&`
+escaped.
 
 ## How it talks to Mentari
 

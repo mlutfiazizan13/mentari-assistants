@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import LogDisplay from "@/components/LogDisplay";
+import ForumPanel from "@/components/ForumPanel";
+import PertemuanFlow from "@/components/PertemuanFlow";
 import QuestionPreview from "@/components/QuestionPreview";
 import type {
   AutomationLog,
@@ -13,7 +15,15 @@ import type {
 } from "@/types/mentari";
 import type { FormDefaults } from "./api/defaults/route";
 
-type Mode = "quiz" | "kuesioner";
+type Mode = "pertemuan" | "quiz" | "kuesioner" | "forum";
+
+// "Per Pertemuan" is the guided flow; the rest are the single-purpose tools.
+const MODE_LABELS: Record<Mode, string> = {
+  pertemuan: "Per Pertemuan",
+  quiz: "Quiz",
+  kuesioner: "Kuesioner",
+  forum: "Forum Diskusi",
+};
 type Step = "idle" | "previewing" | "automating" | "done";
 
 interface PreviewData {
@@ -60,7 +70,7 @@ function gradeColor(grade: number): string {
   return "text-red-400";
 }
 
-type ProviderColor = "blue" | "cyan" | "orange" | "purple";
+type ProviderColor = "blue" | "cyan" | "orange" | "purple" | "green";
 
 // Written out in full so Tailwind's scanner sees every class literally.
 const PROVIDER_STYLES: Record<ProviderColor, { card: string; badge: string }> = {
@@ -68,6 +78,7 @@ const PROVIDER_STYLES: Record<ProviderColor, { card: string; badge: string }> = 
   cyan: { card: "bg-cyan-600/20 border-cyan-500 text-white", badge: "text-cyan-400" },
   orange: { card: "bg-orange-600/20 border-orange-500 text-white", badge: "text-orange-400" },
   purple: { card: "bg-purple-600/20 border-purple-500 text-white", badge: "text-purple-400" },
+  green: { card: "bg-green-600/20 border-green-500 text-white", badge: "text-green-400" },
 };
 
 const PROVIDER_OPTIONS: { value: AIProvider; label: string; badge: string; color: ProviderColor }[] = [
@@ -75,7 +86,19 @@ const PROVIDER_OPTIONS: { value: AIProvider; label: string; badge: string; color
   { value: "ollama-cloud", label: "Ollama gpt-oss:120b", badge: "Cloud", color: "cyan" },
   { value: "ollama", label: "Ollama qwen2.5:7b", badge: "Local", color: "orange" },
   { value: "anthropic", label: "Claude Haiku", badge: "Paid", color: "purple" },
+  { value: "vllm", label: "vLLM Qwen3 27B", badge: "Self-hosted", color: "green" },
 ];
+
+const PROVIDER_KEY = "mentari.provider";
+
+function readSavedProvider(): AIProvider | null {
+  try {
+    const saved = window.localStorage.getItem(PROVIDER_KEY);
+    return PROVIDER_OPTIONS.some((p) => p.value === saved) ? (saved as AIProvider) : null;
+  } catch {
+    return null;
+  }
+}
 
 const QUIZ_KIND_STYLES: Record<QuizKind, { label: string; className: string }> = {
   "pre-test": {
@@ -120,7 +143,9 @@ const RATING_OPTIONS = [
 ];
 
 export default function Home() {
-  const [mode, setMode] = useState<Mode>("quiz");
+  const [mode, setMode] = useState<Mode>("pertemuan");
+  /** The account card folds to one line once credentials are filled in. */
+  const [accountOpen, setAccountOpen] = useState<boolean | null>(null);
 
   // Shared credentials
   const [username, setUsername] = useState("");
@@ -149,6 +174,10 @@ export default function Home() {
   const [kuesionerStep, setKuesionerStep] = useState<"idle" | "loading" | "done">("idle");
   const [kuesionerResult, setKuesionerResult] = useState<KuesionerResult | null>(null);
   const [kuesionerLogs, setKuesionerLogs] = useState<AutomationLog[]>([]);
+
+  // Forum tab keeps its own state; the page only needs to know when it is busy.
+  const [forumBusy, setForumBusy] = useState(false);
+  const [flowBusy, setFlowBusy] = useState(false);
 
   // Shared error
   const [error, setError] = useState<string | null>(null);
@@ -185,7 +214,10 @@ export default function Home() {
         fill(d.quizId, setQuizId);
         fill(d.kodeCourse, setKodeCourse);
         fill(d.kodeSection, setKodeSection);
-        if (d.provider) setProvider(d.provider);
+        // The provider you last picked here wins; .env is the default before that.
+        const saved = readSavedProvider();
+        if (saved) setProvider(saved);
+        else if (d.provider) setProvider(d.provider);
       })
       .catch(() => {
         // Prefill is a convenience; a failure just leaves the form empty.
@@ -222,7 +254,7 @@ export default function Home() {
 
   const isQuizLoading = step === "previewing" || step === "automating";
   const isKuesionerLoading = kuesionerStep === "loading";
-  const isLoading = isQuizLoading || isKuesionerLoading;
+  const isLoading = isQuizLoading || isKuesionerLoading || forumBusy || flowBusy;
 
   // ── Quiz handlers ──────────────────────────────────────────────
   const handlePreview = async () => {
@@ -282,6 +314,35 @@ export default function Home() {
     }
   };
 
+  /**
+   * Re-read one course and swap it into the list, keeping the name from the
+   * full scan (a single-course scan has no list row to take it from).
+   */
+  const refreshCourse = useCallback(
+    async (kodeCourse: string) => {
+      try {
+        const res = await fetch("/api/mentari/courses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password, captcha, kodeCourse }),
+        });
+        const data = (await res.json()) as CourseScanResponse;
+        const fresh = data.courses?.[0];
+        if (!res.ok || !fresh || fresh.error) return;
+        setCourses((prev) =>
+          prev?.map((c) =>
+            c.kodeCourse === kodeCourse
+              ? { ...fresh, namaCourse: c.namaCourse, courseLabel: c.courseLabel ?? fresh.courseLabel }
+              : c
+          ) ?? prev
+        );
+      } catch {
+        // A stale done flag is not worth an error banner; Refresh all fixes it.
+      }
+    },
+    [username, password, captcha]
+  );
+
   const handleAutomate = async () => {
     setStep("automating");
     setError(null);
@@ -325,10 +386,57 @@ export default function Home() {
     }
   };
 
+  const chooseProvider = (value: AIProvider) => {
+    setProvider(value);
+    try {
+      window.localStorage.setItem(PROVIDER_KEY, value);
+    } catch {
+      // Storage blocked: the choice just lasts until reload.
+    }
+  };
+
+  // Folded once both credentials are in (from .env or typed), until opened.
+  const accountExpanded = accountOpen ?? !(defaultsLoaded && username && password);
+
   const switchMode = (m: Mode) => {
     setMode(m);
     setError(null);
   };
+
+  // Shared by the quiz and forum tabs.
+  const providerPicker = (
+    <div>
+      <label className="block text-xs text-gray-500 mb-1.5">
+        AI Provider
+        <EnvBadge show={isFromEnv("provider", provider)} />
+      </label>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {PROVIDER_OPTIONS.map((opt) => {
+          const isSelected = provider === opt.value;
+          const style = PROVIDER_STYLES[opt.color];
+          return (
+            <button
+              key={opt.value}
+              onClick={() => chooseProvider(opt.value)}
+              disabled={isLoading}
+              className={`flex flex-col items-start px-3 py-2 rounded-lg border text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                isSelected
+                  ? style.card
+                  : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"
+              }`}
+            >
+              <span className="text-xs font-semibold leading-tight">{opt.label}</span>
+              <span className={`text-[10px] mt-0.5 font-medium ${
+                isSelected ? style.badge : "text-gray-600"
+              }`}>
+                {opt.badge}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -338,13 +446,13 @@ export default function Home() {
         <div className="mb-8">
           <h1 className="text-3xl font-bold tracking-tight">Mentari Assistant</h1>
           <p className="mt-2 text-gray-400 text-sm">
-            Quiz &amp; Kuesioner automation for Mentari UNPAM
+            Quiz, Kuesioner &amp; Forum Diskusi automation for Mentari UNPAM
           </p>
         </div>
 
         {/* Mode Tabs */}
         <div className="flex gap-1 bg-gray-900 rounded-xl p-1 border border-gray-800 mb-6">
-          {(["quiz", "kuesioner"] as Mode[]).map((m) => (
+          {(Object.keys(MODE_LABELS) as Mode[]).map((m) => (
             <button
               key={m}
               onClick={() => switchMode(m)}
@@ -355,17 +463,37 @@ export default function Home() {
                   : "text-gray-500 hover:text-gray-300"
               }`}
             >
-              {m === "quiz" ? "Quiz Automation" : "Kuesioner"}
+              {MODE_LABELS[m]}
             </button>
           ))}
         </div>
 
-        {/* Shared Credentials */}
+        {/* Account & AI -- shared by every tab */}
         <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-6">
-          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">
-            Credentials
-          </h2>
-          {defaultsLoaded && !hasEnvDefaults && (
+          <div className={`flex items-center justify-between gap-3 ${accountExpanded ? "mb-4" : ""}`}>
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+              Account &amp; AI
+            </h2>
+            {!accountExpanded && (
+              <span className="min-w-0 flex-1 truncate text-xs text-gray-300">
+                {username}
+                <span className="text-gray-600"> · </span>
+                <span className="text-gray-400">
+                  {PROVIDER_OPTIONS.find((p) => p.value === provider)?.label ?? provider}
+                </span>
+              </span>
+            )}
+            {username && password && (
+              <button
+                onClick={() => setAccountOpen(!accountExpanded)}
+                disabled={isLoading}
+                className="shrink-0 text-[11px] px-2 py-1 rounded-md border border-gray-700 text-gray-400 hover:border-gray-500 disabled:opacity-40"
+              >
+                {accountExpanded ? "Done" : "Edit"}
+              </button>
+            )}
+          </div>
+          {accountExpanded && defaultsLoaded && !hasEnvDefaults && (
             <p className="-mt-3 mb-4 text-[11px] text-gray-600">
               Tip: set{" "}
               <code className="text-gray-500">MENTARI_USERNAME</code> and{" "}
@@ -373,6 +501,7 @@ export default function Home() {
               <code className="text-gray-500">.env</code> to prefill this form.
             </p>
           )}
+          {accountExpanded && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-gray-500 mb-1.5">
@@ -416,7 +545,9 @@ export default function Home() {
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
               />
             </div>
+            <div className="sm:col-span-2">{providerPicker}</div>
           </div>
+          )}
         </div>
 
         {/* ── QUIZ TAB ── */}
@@ -583,37 +714,6 @@ export default function Home() {
                 )}
               </div>
 
-              <div className="sm:col-span-2">
-                <label className="block text-xs text-gray-500 mb-1.5">
-                  AI Provider
-                  <EnvBadge show={isFromEnv("provider", provider)} />
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {PROVIDER_OPTIONS.map((opt) => {
-                    const isSelected = provider === opt.value;
-                    const style = PROVIDER_STYLES[opt.color];
-                    return (
-                      <button
-                        key={opt.value}
-                        onClick={() => setProvider(opt.value)}
-                        disabled={isQuizLoading}
-                        className={`flex flex-col items-start px-3 py-2 rounded-lg border text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                          isSelected
-                            ? style.card
-                            : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"
-                        }`}
-                      >
-                        <span className="text-xs font-semibold leading-tight">{opt.label}</span>
-                        <span className={`text-[10px] mt-0.5 font-medium ${
-                          isSelected ? style.badge : "text-gray-600"
-                        }`}>
-                          {opt.badge}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
             <div className="flex gap-3 mt-5">
               <button
@@ -812,6 +912,35 @@ export default function Home() {
               {isKuesionerLoading ? <Spinner label="Submitting..." /> : "Submit Kuesioner"}
             </button>
           </div>
+        )}
+
+        {/* ── PER PERTEMUAN (guided) ── */}
+        {mode === "pertemuan" && (
+          <PertemuanFlow
+            credentials={{ username, password, captcha }}
+            provider={provider}
+            courses={courses}
+            scanLoading={scanLoading}
+            scanError={scanError}
+            onLoadCourses={handleLoadCourses}
+            onRefreshCourse={refreshCourse}
+            onBusyChange={setFlowBusy}
+          />
+        )}
+
+        {/* ── FORUM TAB ── */}
+        {mode === "forum" && (
+          <ForumPanel
+            username={username}
+            password={password}
+            captcha={captcha}
+            provider={provider}
+            courses={courses}
+            scanLoading={scanLoading}
+            scanError={scanError}
+            onLoadCourses={handleLoadCourses}
+            onBusyChange={setForumBusy}
+          />
         )}
 
         {/* Error */}

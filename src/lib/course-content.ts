@@ -2,7 +2,10 @@ import type {
   DiscoveredQuiz,
   QuizKind,
   DiscoveredSection,
+  DiscoveredForum,
+  DiscoveredKuesioner,
 } from "@/types/mentari";
+import { stripHtml } from "./html";
 
 /**
  * Pulls quiz sub-sections out of a `/user-course/{kode_course}` payload.
@@ -206,4 +209,81 @@ function walkAnyShape(payload: unknown): DiscoveredQuiz[] {
 export function discoverQuizzes(payload: unknown): DiscoveredQuiz[] {
   const quizzes = parseSections(payload);
   return quizzes.length ? quizzes : walkAnyShape(payload);
+}
+
+/**
+ * Published forum diskusi: `tipe: "FORUM"`, `kode_template: "FORUM_DISKUSI"`,
+ * one per pertemuan. Unpublished ones carry a null id, like quizzes.
+ */
+export function discoverForums(payload: unknown): DiscoveredForum[] {
+  if (!payload || typeof payload !== "object") return [];
+
+  const sections = (payload as { data?: unknown }).data;
+  if (!Array.isArray(sections)) return [];
+
+  const forums: { sort: number; forum: DiscoveredForum }[] = [];
+
+  sections.forEach((rawSection, sectionIndex) => {
+    if (!rawSection || typeof rawSection !== "object") return;
+    const section = rawSection as Json;
+
+    const subSections = section.sub_section ?? section.sub_sections;
+    if (!Array.isArray(subSections)) return;
+
+    const sectionSort =
+      num(section, "sort") === Number.MAX_SAFE_INTEGER ? sectionIndex : num(section, "sort");
+
+    subSections.forEach((rawSub, subIndex) => {
+      if (!rawSub || typeof rawSub !== "object") return;
+      const sub = rawSub as Json;
+
+      const id = str(sub, "id_trx_course_sub_section", "id");
+      if (!UUID.test(id)) return;
+      if (str(sub, "tipe", "jenis", "type").toUpperCase() !== "FORUM") return;
+
+      const subSort = num(sub, "sort") === Number.MAX_SAFE_INTEGER ? subIndex : num(sub, "sort");
+      const theme = stripHtml(str(sub, "konten"));
+
+      forums.push({
+        sort: sectionSort * 1000 + subSort,
+        forum: {
+          id,
+          title: str(sub, "judul", "nama", "title") || "Forum Diskusi",
+          theme: theme || undefined,
+          sectionTitle: str(section, "nama_section", "judul", "nama") || undefined,
+          kodeSection: str(section, "kode_section") || undefined,
+          completed: sub.completion === true,
+        },
+      });
+    });
+  });
+
+  return forums.sort((a, b) => a.sort - b.sort).map((entry) => entry.forum);
+}
+
+/** Published kuesioner entries (`tipe: "QUESIONER"`), one per pertemuan. */
+export function discoverKuesioners(payload: unknown): DiscoveredKuesioner[] {
+  if (!payload || typeof payload !== "object") return [];
+
+  const sections = (payload as { data?: unknown }).data;
+  if (!Array.isArray(sections)) return [];
+
+  const found: DiscoveredKuesioner[] = [];
+  for (const rawSection of sections) {
+    if (!rawSection || typeof rawSection !== "object") continue;
+    const section = rawSection as Json;
+    const kodeSection = str(section, "kode_section");
+    const subSections = section.sub_section ?? section.sub_sections;
+    if (!kodeSection || !Array.isArray(subSections)) continue;
+
+    for (const rawSub of subSections) {
+      if (!rawSub || typeof rawSub !== "object") continue;
+      const sub = rawSub as Json;
+      const id = str(sub, "id_trx_course_sub_section", "id");
+      if (!UUID.test(id)) continue;
+      if (str(sub, "tipe", "jenis", "type").toUpperCase() !== "QUESIONER") continue;
+      found.push({ id, kodeSection, completed: sub.completion === true });
+    }
+  }
+  return found;
 }
